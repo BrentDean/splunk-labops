@@ -22,3 +22,6 @@ etc/
 *.zip
 __pycache__/
 .pytest_cache/
+
+# Unredacted live security telemetry
+docs/screenshots/HEC Live VPS Data.png

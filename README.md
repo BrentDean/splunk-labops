@@ -2,31 +2,44 @@
 
 Local-first operational and security telemetry for a home lab, a long-running Hetzner VPS, and disposable AWS infrastructure.
 
-> **Status (2026-09-26): Local Splunk deployment and ingestion smoke test complete.** Splunk Enterprise is healthy, the Developer Personal License is active, all 19 indexes have verified size limits, and a synthetic JSON event was uploaded and retrieved from `labops_local`. Continuous Hetzner/AWS ingestion and alerting are not configured yet.
+> **Status (2026-09-26): Local Splunk and automated Hetzner SSH ingestion operational.** Splunk Enterprise 10.4.3 is healthy, a Developer Personal License is active, and the dedicated LabOps indexes are configured. Separate localhost-only HEC tokens were verified for `labops_local` and `labops_vps`. A Python collector pulls real SSH journal events from Hetzner over SSH, submits them to local Splunk, and runs on a five-minute systemd user timer. Fail2Ban, Apache, AWS collection, dashboards, and alerting remain planned.
 
 ## Purpose
 
-Build a reproducible, documented observability environment that can ingest and investigate genuine application, operating-system, web-server, authentication, and infrastructure events. The deployment will start with local test data, then add the Hetzner staging VPS, and finally collect telemetry from short-lived AWS three-tier/Kubernetes lab runs.
+Build a reproducible, documented observability environment for application, operating-system, web-server, authentication, and infrastructure events. Local ingestion and automated Hetzner SSH collection are implemented. Fail2Ban and Apache are next; AWS telemetry from short-lived infrastructure labs is optional future work.
 
 This project uses **Splunk Enterprise**, not Splunk Enterprise Security.
 
-## Architecture (current and planned)
+## Architecture
 
 ```text
+Hetzner staging VPS (Debian 13)
+    |
+    | OpenSSH / ssh.service systemd journal
+    | workstation-initiated SSH, port 4222
+    v
 Debian 12 workstation
-  ├── Splunk Enterprise 10.4.3 (Docker Compose)
-  │     ├── Splunk Web: 127.0.0.1:18000 → container port 8000
-  │     ├── configuration: /mnt/labops-splunk/etc
-  │     └── indexes and runtime data: /mnt/labops-splunk/var
-  ├── Porter / Prometheus / Grafana (separate existing deployment)
-  └── synthetic local JSON smoke test (verified in `labops_local`)
-
-Future sources, after secure ingestion is configured:
-  ├── Hetzner Debian staging VPS
-  └── disposable AWS three-tier / k3s lab
+    |
+    +-- systemd user timer (every five minutes)
+    |     +-- Python SSH journal collector
+    |           +-- remote journal cursor / original timestamps
+    |           +-- event classification / source IP extraction
+    |           +-- CA-verified and pinned localhost HEC TLS
+    |           v
+    |       Splunk HEC: https://127.0.0.1:18088
+    |           +-- labops_vps
+    |
+    +-- Splunk Enterprise 10.4.3 (Docker Compose)
+    |     +-- Splunk Web: http://127.0.0.1:18000
+    |     +-- configuration: /mnt/labops-splunk/etc
+    |     +-- indexes/runtime data: /mnt/labops-splunk/var
+    |     +-- labops_local
+    |     +-- labops_aws (configured; AWS ingestion not active)
+    |
+    +-- Porter / Prometheus / Grafana (separate deployment)
 ```
 
-Only Splunk Web is **host-published** by the current Compose file, bound to **127.0.0.1**. The provisioning log shows an internal Splunk-to-Splunk TCP input enabled and global HEC setup, but neither receiver port is mapped onto the workstation by the documented Compose file. Confirm Docker port bindings and Splunk inputs before connecting any clients. Do not publish an ingestion port without authentication, TLS, access controls, and network restrictions.
+Only Splunk Web and HEC are host-published, both on workstation loopback. The workstation pulls logs from Hetzner over its existing key-authenticated SSH connection. There is no public Splunk listener and no Splunk HEC credential on the VPS. The internal Docker-exposed Splunk ports are not mapped to host interfaces.
 
 ## Current deployment
 
@@ -41,6 +54,7 @@ Only Splunk Web is **host-published** by the current Compose file, bound to **12
 | Persistent Splunk configuration | `/mnt/labops-splunk/etc` |
 | Persistent Splunk runtime/index data | `/mnt/labops-splunk/var` |
 | Web endpoint | `http://127.0.0.1:18000` (verified) |
+| HEC endpoint | `https://127.0.0.1:18088` (verified; loopback only) |
 | Container limits | 8 GiB memory; 4 CPUs |
 | Docker JSON logs | 10 MB/file × 3 rotated files |
 | Initial total-footprint planning target | Approximately 20 GB; **not an enforced disk quota** |
@@ -72,7 +86,7 @@ Local overrides live at `$SPLUNK_HOME/etc/system/local/indexes.conf` in the cont
 | Index | Maximum indexed size | Time-based retention | Intended use |
 | --- | ---: | ---: | --- |
 | `labops_local` | 1,024 MB | Up to 7 days | Workstation and local test events |
-| `labops_vps` | 2,048 MB | Up to 14 days | Planned Hetzner VPS telemetry |
+| `labops_vps` | 2,048 MB | Up to 14 days | Active Hetzner SSH telemetry; more sources planned |
 | `labops_aws` | 2,048 MB | Up to 14 days | Planned disposable AWS lab telemetry |
 
 The 16 existing Splunk indexes were also assigned smaller per-index limits. The combined **configured index size targets total 12 GiB**. Data can be retired earlier when an index reaches its size limit; absent a frozen archive, retired events are deleted. Configuration, logs, Docker layers, and search artifacts consume additional storage.
@@ -83,15 +97,101 @@ The 16 existing Splunk indexes were also assigned smaller per-index limits. The 
 index=labops_local "labops_smoke_test"
 ```
 
-This validates manual local ingestion and search. It **does not** yet demonstrate continuous ingestion, HEC, Hetzner monitoring, AWS collection, or production alerting.
+This initial test validates manual local ingestion. Programmatic HEC and live Hetzner SSH journal ingestion were subsequently implemented and verified below. AWS collection and production alerting are not implemented.
+
+## HEC ingestion and Hetzner SSH journal collector
+
+### Dedicated HEC credentials
+
+HTTP Event Collector is enabled over HTTPS on workstation loopback (`127.0.0.1:18088`). Two tokens separate ingestion scope:
+
+| Token name | Allowed and default index | Verified evidence |
+| --- | --- | --- |
+| `labops-local-hec` | `labops_local` | Indexed and searched a synthetic authentication failure |
+| `labops-vps-hec` | `labops_vps` | Indexed and searched a synthetic connectivity event |
+
+Both tokens use the `_json` source type. Token values are saved outside this repository in private, mode-`0600` files under `~/.config/labops-splunk/private/`. The repository contains no credentials, license file, raw journal exports, or Splunk runtime data.
+
+The synthetic searches were:
+
+```spl
+index=labops_local test_id="labops_hec_smoke_test"
+```
+
+```spl
+index=labops_vps test_id="labops_vps_hec_smoke"
+```
+
+![Synthetic local HEC event](docs/screenshots/05-local-hec-ingestion.png)
+
+![Synthetic VPS-index HEC event](docs/screenshots/06-vps-hec-ingestion.png)
+
+### Real SSH telemetry
+
+[`collectors/hetzner_journal.py`](collectors/hetzner_journal.py) retrieves JSON records from Hetzner's `ssh.service` journal using the existing Ansible inventory and key-authenticated SSH connection. The initial run collects up to the preceding 24 hours; subsequent runs pass the last saved `__CURSOR` to `journalctl --after-cursor`.
+
+The collector preserves `__REALTIME_TIMESTAMP`, records journal cursors, classifies common OpenSSH messages, extracts IPv4/IPv6 source addresses where present, and sends events into `labops_vps` through the local HEC endpoint. It uses the configured Splunk CA and a pinned leaf certificate; hostname verification is disabled for the default Splunk certificate, which does not establish a verified `127.0.0.1` identity. A dedicated certificate with a localhost IP Subject Alternative Name remains a hardening improvement. A certificate change requires explicit operator review rather than automatic repinning.
+
+Private state and trust files, kept outside Git:
+
+```text
+~/.config/labops-splunk/private/hec-vps.token
+~/.config/labops-splunk/private/hec-ca.pem
+~/.config/labops-splunk/private/hec-cert.sha256
+~/.config/labops-splunk/private/hetzner-ssh.cursor
+```
+
+Run a manual collection from the checkout:
+
+```bash
+python3 collectors/hetzner_journal.py
+```
+
+Search real events in Splunk:
+
+```spl
+index=labops_vps source="journal:ssh"
+| table _time host event_type src_ip message
+| sort - _time
+```
+
+Check for duplicated journal cursors:
+
+```spl
+index=labops_vps source="journal:ssh"
+| stats count as copies by journal_cursor
+| where copies > 1
+```
+
+The first two manual runs produced 16 indexed SSH events, with no duplicated cursors observed. Additional manual and timer-triggered runs ingested newer records. A returned HTTP 200 / HEC code 0 means the event was accepted, not that completed indexing is guaranteed: indexer acknowledgment is disabled. The pipeline has at-least-once submission semantics, so a crash after HEC acceptance but before writing the cursor can cause duplicates. Recovery is also bounded by journal retention on the VPS.
+
+### Automatic collection and tests
+
+The installed user units are tracked in [`systemd/`](systemd/):
+
+- `labops-hetzner.service`: `Type=oneshot` Python collector run as the workstation user.
+- `labops-hetzner.timer`: five-minute calendar schedule.
+
+The service file uses workstation-specific absolute paths; adapt them before deploying elsewhere. The first timer-triggered run was verified on September 25, 2026 at 9:25 PM EDT: three SSH journal records were accepted by HEC and the timer scheduled its next activation for 9:30 PM. At that time `Linger=no`; continued operation after the last logout has not been verified.
+
+```bash
+python3 -m unittest discover -s tests -v
+systemctl --user status labops-hetzner.timer --no-pager
+systemctl --user list-timers --all | grep labops
+journalctl --user -u labops-hetzner.service -n 30 --no-pager
+```
+
+Nine unit tests pass for classification, source-IP parsing (including IPv6), timestamp preservation, and not advancing the cursor after failed HEC submission.
+
+The unredacted live-telemetry screenshot is intentionally excluded from Git; it contains public source IPs and SSH-related details. Publish only a reviewed, sanitized derivative.
 
 ## Deployment evidence
 
-The following screenshots were captured during the initial local deployment. They use synthetic test data and show configuration and verification rather than claiming that external monitoring is live.
+The following four screenshots were captured during the initial local deployment, before HEC and remote log collection were enabled. They document the original setup; current HEC and Hetzner telemetry are described above.
 
 ### 1. Healthy container and effective index settings
 
-The Docker container reports `healthy`; only Splunk Web is host-published at `127.0.0.1:18000`. The CLI output independently confirms the three LabOps size and retention settings.
+At capture time, the Docker container reported `healthy` and only Splunk Web was host-published. HEC was subsequently published on loopback at `127.0.0.1:18088`. The CLI output independently confirms the three LabOps size and retention settings.
 
 ![Healthy Splunk Docker container and effective LabOps index configuration](docs/screenshots/01-docker-health.png)
 
@@ -103,7 +203,7 @@ Splunk Web shows the `labops_vps` index with a **2 GB** maximum and a **128 MB**
 
 ### 3. Managed index inventory
 
-The Indexes screen shows **19 indexes**, including `labops_aws`, `labops_local`, and `labops_vps`, with the configured per-index maximum sizes. At capture time, `labops_local` contained one test event; the VPS and AWS indexes were empty.
+The Indexes screen shows **19 indexes**, including `labops_aws`, `labops_local`, and `labops_vps`, with the configured per-index maximum sizes. At capture time, `labops_local` contained one test event; the VPS and AWS indexes were empty. The VPS index now contains real SSH events.
 
 ![Splunk index inventory with three dedicated LabOps indexes](docs/screenshots/03-managed-indexes.png)
 
@@ -151,15 +251,23 @@ Do **not** publish `docker compose config` output, as interpolation can expose s
 - [x] Configure and verify index size/retention limits **before continuous ingestion**.
 - [x] Verify localhost-only host port publication and measure root filesystem capacity.
 - [x] Upload a controlled local JSON event and retrieve it with SPL.
-- [ ] Configure authenticated, TLS-protected ingestion (start with a localhost-only HEC test).
-- [ ] Securely connect Hetzner VPS logs and build first searches/dashboards.
-- [ ] Instrument AWS lab runs; distinguish live events from historic test runs.
-- [ ] Add repeatable operational checks and sanitized portfolio documentation.
+- [x] Configure authenticated localhost-only HEC with separate local and VPS tokens.
+- [x] Index and search synthetic HEC events in both dedicated indexes.
+- [x] Collect and search genuine Hetzner SSH journal events over SSH.
+- [x] Preserve original journal timestamps and maintain an incremental cursor.
+- [x] Verify no duplicate cursors in the first 16 indexed SSH events.
+- [x] Pass nine automated collector tests.
+- [x] Verify the five-minute systemd user timer triggers collection.
+- [ ] Validate unattended operation after logout and longer connectivity gaps.
+- [ ] Add Fail2Ban and Apache telemetry.
+- [ ] Build SPL detections, dashboards, and alerting.
+- [ ] Optionally instrument disposable AWS lab runs.
+- [ ] Publish a sanitized live-telemetry screenshot.
 
 ## Repository scope
 
 Track only reproducible, shareable materials: this README, sanitized Compose templates, `.env.example` containing **no real values**, index/input configuration templates, deployment scripts, searches, dashboards, architecture notes, and test fixtures with synthetic data. Keep runtime files on the workstation outside the Git checkout.
 
-Suggested repository name: `labops-observability`. A separate repository is useful because this project covers local, Hetzner, and AWS telemetry rather than only the AWS infrastructure automation lab; it is **not required** to finish the local Splunk installation.
+Repository: `BrentDean/splunk-labops`. It is separate from the AWS infrastructure automation and Porter repositories.
 
 > Screenshot paths above are relative to this README. Keep `docs/screenshots/` alongside `README.md` when publishing the repository.
