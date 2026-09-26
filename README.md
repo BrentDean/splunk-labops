@@ -1,19 +1,19 @@
 # Splunk LabOps — Security Telemetry Engineering
 
-A Splunk Enterprise and Python security telemetry pipeline connecting a remote Hetzner Linux VPS with a Debian workstation for centralized collection and investigation of authentication events.
+Splunk Enterprise deployment and automated security telemetry collection from an internet-facing Hetzner VPS hosting live web applications.
 
-> **Operational pipeline (2026-09-26):** Splunk Enterprise 10.4.3 indexes real SSH journal events collected from a Hetzner VPS by a Python collector on a five-minute systemd user timer. Scoped HTTPS HEC tokens, incremental journal cursors, preserved event timestamps, and nine automated collector tests support the implementation.
+> **Deployment (September 2026):** Splunk Enterprise 10.4.3 receives genuine SSH authentication and connection events from the remote Debian VPS through a Python collector and authenticated HTTPS HEC. A five-minute systemd timer, journal cursor checkpointing, original event timestamps, and automated tests support repeatable collection.
 
 ## Project overview
 
-I deployed Splunk Enterprise on my Debian workstation and built a Python security telemetry collector for a remote Hetzner VPS. The collector retrieves OpenSSH journal records over key-authenticated SSH, normalizes them into structured events, and submits them through Splunk's authenticated HTTPS Event Collector (HEC) for SPL-based investigation. A systemd user timer runs the collection every five minutes; persistent journal cursors support incremental processing and recovery.
+I deployed Splunk Enterprise 10.4.3 in Docker on a Debian 12 host and engineered an automated collection pipeline for a live Hetzner-hosted Debian 13 VPS serving web applications. The Python collector retrieves OpenSSH journal events over key-authenticated SSH, normalizes them, and forwards them through authenticated HTTPS Event Collector (HEC) into a dedicated Splunk index. A systemd timer runs collection every five minutes, with durable journal cursor checkpoints and preserved source timestamps.
 
-The project brings together Splunk administration, Linux security logging, Python automation, API integration, and testable operational behavior. The deployed product is **Splunk Enterprise**.
+The implementation covers Splunk platform administration, remote Linux security telemetry, Python/API integration, secure transport, event lifecycle management, and automated testing. The current collector ingests the VPS's SSH service journal; Apache and Fail2Ban are subsequent data-source integrations.
 
 ## Architecture
 
 ```text
-Hetzner staging VPS (Debian 13)
+Hetzner VPS hosting live web applications (Debian 13)
     |
     | OpenSSH / ssh.service systemd journal
     | workstation-initiated SSH, port 4222
@@ -57,15 +57,15 @@ Only Splunk Web and HEC are host-published, both on workstation loopback. The wo
 | HEC endpoint | `https://127.0.0.1:18088` (verified; loopback only) |
 | Container limits | 8 GiB memory; 4 CPUs |
 | Docker JSON logs | 10 MB/file × 3 rotated files |
-| Initial total-footprint planning target | Approximately 20 GB; **not an enforced disk quota** |
+| Initial storage planning target | Approximately 20 GB; **not an enforced disk quota** |
 
 **Storage design:** `/mnt/labops-splunk` resides on the workstation's existing LUKS-encrypted ext4 **root filesystem** (`/dev/mapper/luksroot`); `/mnt` is not a separate disk. After the smoke test, the persistent configuration directory measured about **1.2 GB**, runtime/index data about **1.4 GB**, and the root filesystem had about **149 GB available** (69% used). Docker image and build-cache usage are additional. Index size limits are retention targets, **not** a hard quota on the whole deployment.
 
-## Developer License
+## Splunk license
 
 The **Splunk Developer Personal License** is installed and marked **valid** in Splunk Web, with an effective daily volume of **10,240 MB (10 GB)** and a displayed expiration of **March 25, 2027**. This is an ingestion allowance, not a disk quota or an expectation of 10 GB of logs per day. Keep license files, account email, credentials, and tokens out of Git.
 
-## First-run failure and resolution (2026-09-25)
+## Provisioning incident and resolution (2026-09-25)
 
 The first startup repeatedly failed at Ansible's `set version fact` task because the startup identity could not read `/opt/splunk/etc/splunk.version`.
 
@@ -79,7 +79,7 @@ Observed diagnostics:
 
 The Splunk Web login and sustained `docker ps` health check were subsequently verified. Do not recursively change permissions on `etc` or expose secret-bearing files.
 
-## Index design and first ingestion test
+## Index design and ingestion verification
 
 Local overrides live at `$SPLUNK_HOME/etc/system/local/indexes.conf` in the container, backed by `/mnt/labops-splunk/etc/system/local/indexes.conf` on the workstation. The operator verified the effective configuration with `splunk btool indexes list` executed as the Splunk UID (`41812`), rather than relying only on the file contents.
 
@@ -126,7 +126,7 @@ index=labops_vps test_id="labops_vps_hec_smoke"
 
 ![Synthetic VPS-index HEC event](docs/screenshots/06-vps-hec-ingestion.png)
 
-### Real SSH telemetry
+### Live VPS SSH telemetry
 
 [`collectors/hetzner_journal.py`](collectors/hetzner_journal.py) retrieves JSON records from Hetzner's `ssh.service` journal using the existing Ansible inventory and key-authenticated SSH connection. The initial run collects up to the preceding 24 hours; subsequent runs pass the last saved `__CURSOR` to `journalctl --after-cursor`.
 
@@ -239,7 +239,7 @@ df -hT /mnt/labops-splunk
 
 Do **not** publish `docker compose config` output, as interpolation can expose secrets. Do not commit `compose.env`, Splunk `etc/` or `var/`, logs, credentials, tokens, license files, or raw VPS/security events.
 
-## Engineering milestones
+## Implementation and next milestones
 
 - [x] Inspect workstation capacity and existing services.
 - [x] Pull Splunk Enterprise 10.4.3 and create isolated Compose deployment.
