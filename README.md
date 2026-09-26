@@ -1,14 +1,14 @@
-# LabOps Observability
+# Splunk LabOps — Security Telemetry Engineering
 
-Local-first operational and security telemetry for a home lab, a long-running Hetzner VPS, and disposable AWS infrastructure.
+A Splunk Enterprise and Python security telemetry pipeline connecting a remote Hetzner Linux VPS with a Debian workstation for centralized collection and investigation of authentication events.
 
-> **Status (2026-09-26): Local Splunk and automated Hetzner SSH ingestion operational.** Splunk Enterprise 10.4.3 is healthy, a Developer Personal License is active, and the dedicated LabOps indexes are configured. Separate localhost-only HEC tokens were verified for `labops_local` and `labops_vps`. A Python collector pulls real SSH journal events from Hetzner over SSH, submits them to local Splunk, and runs on a five-minute systemd user timer. Fail2Ban, Apache, AWS collection, dashboards, and alerting remain planned.
+> **Operational pipeline (2026-09-26):** Splunk Enterprise 10.4.3 indexes real SSH journal events collected from a Hetzner VPS by a Python collector on a five-minute systemd user timer. Scoped HTTPS HEC tokens, incremental journal cursors, preserved event timestamps, and nine automated collector tests support the implementation.
 
-## Purpose
+## Project overview
 
-Build a reproducible, documented observability environment for application, operating-system, web-server, authentication, and infrastructure events. Local ingestion and automated Hetzner SSH collection are implemented. Fail2Ban and Apache are next; AWS telemetry from short-lived infrastructure labs is optional future work.
+I deployed Splunk Enterprise on my Debian workstation and built a Python security telemetry collector for a remote Hetzner VPS. The collector retrieves OpenSSH journal records over key-authenticated SSH, normalizes them into structured events, and submits them through Splunk's authenticated HTTPS Event Collector (HEC) for SPL-based investigation. A systemd user timer runs the collection every five minutes; persistent journal cursors support incremental processing and recovery.
 
-This project uses **Splunk Enterprise**, not Splunk Enterprise Security.
+The project brings together Splunk administration, Linux security logging, Python automation, API integration, and testable operational behavior. The deployed product is **Splunk Enterprise**.
 
 ## Architecture
 
@@ -41,7 +41,7 @@ Debian 12 workstation
 
 Only Splunk Web and HEC are host-published, both on workstation loopback. The workstation pulls logs from Hetzner over its existing key-authenticated SSH connection. There is no public Splunk listener and no Splunk HEC credential on the VPS. The internal Docker-exposed Splunk ports are not mapped to host interfaces.
 
-## Current deployment
+## Deployment configuration
 
 | Item | Value |
 | --- | --- |
@@ -59,7 +59,7 @@ Only Splunk Web and HEC are host-published, both on workstation loopback. The wo
 | Docker JSON logs | 10 MB/file × 3 rotated files |
 | Initial total-footprint planning target | Approximately 20 GB; **not an enforced disk quota** |
 
-**Storage clarification:** `/mnt/labops-splunk` resides on the workstation's existing LUKS-encrypted ext4 **root filesystem** (`/dev/mapper/luksroot`); `/mnt` is not a separate disk. After the smoke test, the persistent configuration directory measured about **1.2 GB**, runtime/index data about **1.4 GB**, and the root filesystem had about **149 GB available** (69% used). Docker image and build-cache usage are additional. Index size limits are retention targets, **not** a hard quota on the whole deployment.
+**Storage design:** `/mnt/labops-splunk` resides on the workstation's existing LUKS-encrypted ext4 **root filesystem** (`/dev/mapper/luksroot`); `/mnt` is not a separate disk. After the smoke test, the persistent configuration directory measured about **1.2 GB**, runtime/index data about **1.4 GB**, and the root filesystem had about **149 GB available** (69% used). Docker image and build-cache usage are additional. Index size limits are retention targets, **not** a hard quota on the whole deployment.
 
 ## Developer License
 
@@ -97,7 +97,7 @@ The 16 existing Splunk indexes were also assigned smaller per-index limits. The 
 index=labops_local "labops_smoke_test"
 ```
 
-This initial test validates manual local ingestion. Programmatic HEC and live Hetzner SSH journal ingestion were subsequently implemented and verified below. AWS collection and production alerting are not implemented.
+This initial test established the ingestion and search path before programmatic HEC and live Hetzner SSH journal collection were added.
 
 ## HEC ingestion and Hetzner SSH journal collector
 
@@ -110,7 +110,7 @@ HTTP Event Collector is enabled over HTTPS on workstation loopback (`127.0.0.1:1
 | `labops-local-hec` | `labops_local` | Indexed and searched a synthetic authentication failure |
 | `labops-vps-hec` | `labops_vps` | Indexed and searched a synthetic connectivity event |
 
-Both tokens use the `_json` source type. Token values are saved outside this repository in private, mode-`0600` files under `~/.config/labops-splunk/private/`. The repository contains no credentials, license file, raw journal exports, or Splunk runtime data.
+Both tokens use the `_json` source type. Token values are saved outside this repository in private, mode-`0600` files under `~/.config/labops-splunk/private/`. Credentials, license files, raw journal exports, and Splunk runtime data stay outside the Git checkout.
 
 The synthetic searches were:
 
@@ -183,11 +183,11 @@ journalctl --user -u labops-hetzner.service -n 30 --no-pager
 
 Nine unit tests pass for classification, source-IP parsing (including IPv6), timestamp preservation, and not advancing the cursor after failed HEC submission.
 
-The unredacted live-telemetry screenshot is intentionally excluded from Git; it contains public source IPs and SSH-related details. Publish only a reviewed, sanitized derivative.
+A sanitized live-telemetry screenshot will be added after review. Raw VPS events and credentials remain outside the repository.
 
 ## Deployment evidence
 
-The following four screenshots were captured during the initial local deployment, before HEC and remote log collection were enabled. They document the original setup; current HEC and Hetzner telemetry are described above.
+The deployment screenshots document the platform setup and initial ingestion checks; HEC ingestion screenshots follow in the collector section above.
 
 ### 1. Healthy container and effective index settings
 
@@ -239,7 +239,7 @@ df -hT /mnt/labops-splunk
 
 Do **not** publish `docker compose config` output, as interpolation can expose secrets. Do not commit `compose.env`, Splunk `etc/` or `var/`, logs, credentials, tokens, license files, or raw VPS/security events.
 
-## Roadmap
+## Engineering milestones
 
 - [x] Inspect workstation capacity and existing services.
 - [x] Pull Splunk Enterprise 10.4.3 and create isolated Compose deployment.
@@ -264,10 +264,6 @@ Do **not** publish `docker compose config` output, as interpolation can expose s
 - [ ] Optionally instrument disposable AWS lab runs.
 - [ ] Publish a sanitized live-telemetry screenshot.
 
-## Repository scope
+## Repository contents
 
-Track only reproducible, shareable materials: this README, sanitized Compose templates, `.env.example` containing **no real values**, index/input configuration templates, deployment scripts, searches, dashboards, architecture notes, and test fixtures with synthetic data. Keep runtime files on the workstation outside the Git checkout.
-
-Repository: `BrentDean/splunk-labops`. It is separate from the AWS infrastructure automation and Porter repositories.
-
-> Screenshot paths above are relative to this README. Keep `docs/screenshots/` alongside `README.md` when publishing the repository.
+The repository tracks the Python collector, systemd units, automated tests, index configuration and deployment evidence. Runtime files, secrets, license material, and raw security logs are maintained outside the checkout. The Splunk LabOps repository complements my separate infrastructure automation and Porter projects.
