@@ -16,7 +16,7 @@ The implementation covers Splunk platform administration, remote Linux security 
 Hetzner VPS hosting live web applications (Debian 13)
     |
     | OpenSSH / ssh.service systemd journal
-    | workstation-initiated SSH, port 4222
+    | workstation-initiated SSH, port 22
     v
 Debian 12 workstation
     |
