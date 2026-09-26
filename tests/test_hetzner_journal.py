@@ -18,7 +18,7 @@ class SSHParserTests(unittest.TestCase):
     def test_successful_public_key_authentication(self):
         message = (
             "Accepted publickey for admin "
-            "from 192.0.2.10 port 4222 ssh2"
+            "from 192.0.2.10 port 22 ssh2"
         )
 
         self.assertEqual(
@@ -34,7 +34,7 @@ class SSHParserTests(unittest.TestCase):
     def test_failed_password(self):
         message = (
             "Failed password for admin "
-            "from 192.0.2.11 port 4222 ssh2"
+            "from 192.0.2.11 port 22 ssh2"
         )
 
         self.assertEqual(
@@ -91,7 +91,7 @@ class SSHParserTests(unittest.TestCase):
     def test_ipv6_source_address(self):
         message = (
             "Accepted publickey for admin "
-            "from 2001:db8::10 port 4222 ssh2"
+            "from 2001:db8::10 port 22 ssh2"
         )
 
         self.assertEqual(
