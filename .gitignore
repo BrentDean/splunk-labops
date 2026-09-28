@@ -1,0 +1,27 @@
+# Credentials and licensing
+compose.env
+.env
+.env.*
+*.env
+*.lic
+*.License
+*.license
+*.pem
+*.key
+*.token
+secrets/
+private/
+
+# Splunk runtime data
+var/
+etc/
+*.log
+
+# Backups and generated files
+*.bak
+*.zip
+__pycache__/
+.pytest_cache/
+
+# Unredacted live security telemetry
+docs/screenshots/private/

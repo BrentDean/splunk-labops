@@ -1,0 +1,14 @@
+[Unit]
+Description=Splunk LabOps Hetzner SSH Journal Collector
+
+[Service]
+Type=oneshot
+
+WorkingDirectory=/mnt/hyperV/projects/splunk-labops
+
+ExecStart=/usr/bin/python3 /mnt/hyperV/projects/splunk-labops/collectors/hetzner_journal.py
+
+Environment=PYTHONDONTWRITEBYTECODE=1
+
+UMask=0077
+TimeoutStartSec=10min

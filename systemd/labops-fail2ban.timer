@@ -1,0 +1,12 @@
+[Unit]
+Description=Collect Hetzner Fail2Ban security events every five minutes
+
+[Timer]
+OnCalendar=*:2/5
+Persistent=true
+AccuracySec=30s
+
+Unit=labops-fail2ban.service
+
+[Install]
+WantedBy=timers.target
